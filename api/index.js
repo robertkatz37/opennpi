@@ -23,6 +23,18 @@ const createAxiosConfig = () => ({
 // 🔹 Minimal delay for Vercel
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// 🔹 Simplified retry with faster failover
+async function fetchWithRetry(url, maxRetries = 2) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await axios.get(url, createAxiosConfig());
+      return response;
+    } catch (error) {
+      if (attempt === maxRetries) throw error;
+      await delay(1000 * attempt);
+    }
+  }
+}
 
 // 🔹 Optimized pagination for Vercel serverless
 async function scrapeTablesWithPagination(baseUrl, tableSelector, maxPages = 10) {
