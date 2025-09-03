@@ -56,7 +56,7 @@ async function fetchWithRetry(url, maxRetries = 3) {
   }
 }
 
-// 🔹 Helper to scrape tables with pagination - USING ORIGINAL SELECTORS
+// 🔹 Enhanced scraper to get ALL records with better pagination handling
 async function scrapeTablesWithPagination(baseUrl, tableSelector, maxPages = 50) {
   let allRows = [];
   let visited = new Set();
@@ -88,51 +88,81 @@ async function scrapeTablesWithPagination(baseUrl, tableSelector, maxPages = 50)
 
       let pageRows = 0;
       
-      // 🔹 USING ORIGINAL SELECTOR: `${tableSelector} tbody tr`
-      $(`${tableSelector} tbody tr`).each((i, tr) => {
+      // Scrape table rows with better selector handling
+      const tableRows = $(`${tableSelector} tbody tr, ${tableSelector} tr`).filter((i, tr) => {
         const tds = $(tr).find("td");
-        if (tds.length >= 4) {
-          const linkTag = $(tds[0]).find("a");
-          const providerName = linkTag.text().trim();
-          const providerLink = linkTag.attr("href") || "#";
-          const address = $(tds[1]).text().trim();
-          const taxonomy = $(tds[2]).text().trim();
-          const enumerationDate = $(tds[3]).text().trim();
+        return tds.length >= 4; // Only rows with enough columns
+      });
 
-          // Skip header rows or empty rows
-          if (!providerName || providerName.toLowerCase() === 'provider name') {
-            return;
-          }
-
-          allRows.push({
-            providerName,
-            providerLink: providerLink.startsWith("http")
-              ? providerLink
-              : `https://opennpi.com${providerLink}`,
-            address,
-            taxonomy,
-            enumerationDate
-          });
-          
-          pageRows++;
+      tableRows.each((i, tr) => {
+        const tds = $(tr).find("td");
+        
+        const linkTag = $(tds[0]).find("a");
+        const providerName = linkTag.text().trim();
+        
+        // Skip header rows or empty rows
+        if (!providerName || providerName.toLowerCase() === 'provider name') {
+          return;
         }
+
+        const providerLink = linkTag.attr("href") || "#";
+        const address = $(tds[1]).text().trim();
+        const taxonomy = $(tds[2]).text().trim();
+        const enumerationDate = $(tds[3]).text().trim();
+
+        allRows.push({
+          providerName,
+          providerLink: providerLink.startsWith("http")
+            ? providerLink
+            : `https://opennpi.com${providerLink}`,
+          address,
+          taxonomy,
+          enumerationDate
+        });
+        
+        pageRows++;
       });
 
       console.log(`✅ Page ${pageCount}: Found ${pageRows} rows (Total: ${allRows.length})`);
 
-      // 🔹 USING ORIGINAL SELECTOR: Get next page link
-      const nextLink = $(".page-item.mx-auto a.page-link")
-        .filter((i, el) => $(el).text().trim() === "Next Page")
-        .attr("href");
+      // Look for next page link with multiple selectors
+      let nextLink = null;
+      
+      // Try different pagination selectors
+      const paginationSelectors = [
+        ".page-item.mx-auto a.page-link",
+        ".pagination .page-item a",
+        "a[aria-label='Next']",
+        ".next-page",
+        "a:contains('Next')",
+        "a:contains('>')"
+      ];
 
-      nextUrl = nextLink
-        ? (nextLink.startsWith("http") ? nextLink : `https://opennpi.com${nextLink}`)
-        : null;
+      for (const selector of paginationSelectors) {
+        const links = $(selector);
+        links.each((i, el) => {
+          const linkText = $(el).text().trim().toLowerCase();
+          const ariaLabel = $(el).attr('aria-label')?.toLowerCase() || '';
+          
+          if (linkText === 'next page' || linkText === 'next' || linkText === '>' || 
+              ariaLabel.includes('next')) {
+            nextLink = $(el).attr("href");
+            return false; // Break the each loop
+          }
+        });
+        
+        if (nextLink) break;
+      }
 
-      if (nextUrl) {
+      // Construct full URL for next page
+      if (nextLink) {
+        nextUrl = nextLink.startsWith("http") 
+          ? nextLink 
+          : `https://opennpi.com${nextLink}`;
         console.log(`🔗 Next page found: ${nextUrl}`);
       } else {
         console.log(`🏁 No more pages found. Pagination complete.`);
+        nextUrl = null;
       }
 
       // Break if no new rows found (might indicate end of data)
@@ -166,7 +196,7 @@ async function scrapeTablesWithPagination(baseUrl, tableSelector, maxPages = 50)
   return allRows;
 }
 
-// 🔹 Route 1: Providers list on root "/" - USING ORIGINAL SELECTORS
+// 🔹 Route 1: Providers list on root "/"
 app.get("/", async (req, res) => {
   try {
     const startTime = Date.now();
@@ -179,7 +209,7 @@ app.get("/", async (req, res) => {
 
     let results = [];
     
-    // 🔹 USING ORIGINAL SELECTOR: $(".px-1 .col-12")
+    // Scrape summary tables
     $(".px-1 .col-12").each((i, el) => {
       const heading = $(el).find("h3").text().trim();
       if (!heading || heading === "Providers by Year") return;
@@ -203,9 +233,9 @@ app.get("/", async (req, res) => {
       if (tables.length) results.push({ heading, tables });
     });
 
-    // 🔹 USING ORIGINAL SELECTOR: "#search-result table"
+    // 🔹 Scrape ALL provider details with enhanced pagination
     console.log("📊 Starting comprehensive provider details scrape...");
-    const providerDetailRows = await scrapeTablesWithPagination(url, "#search-result table", 100);
+    const providerDetailRows = await scrapeTablesWithPagination(url, "#search-result table", 100); // Allow up to 100 pages
 
     const endTime = Date.now();
     const duration = Math.round((endTime - startTime) / 1000);
@@ -236,8 +266,8 @@ app.get("/", async (req, res) => {
           tr:hover { background: #e8f4fd; }
           a { color: #08326B; text-decoration: none; font-weight: 500; }
           a:hover { text-decoration: underline; color: #0a4a8a; }
-          button { display: inline-block; padding: 12px 24px; background: linear-gradient(135deg, #08326B, #0a4a8a); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600; text-decoration: none; transition: all 0.3s ease; margin: 10px 5px 10px 0; }
-          button:hover { background: linear-gradient(135deg, #0a4a8a, #08326B); transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
+          .btn { display: inline-block; padding: 12px 24px; background: linear-gradient(135deg, #08326B, #0a4a8a); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600; text-decoration: none; transition: all 0.3s ease; margin: 10px 5px 10px 0; }
+          .btn:hover { background: linear-gradient(135deg, #0a4a8a, #08326B); transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
           .loading { text-align: center; padding: 40px; color: #666; }
           .error { background: #fee; border-left: 4px solid #f56565; padding: 15px; margin: 15px 0; border-radius: 4px; }
           .success { background: #f0fff4; border-left: 4px solid #68d391; padding: 15px; margin: 15px 0; border-radius: 4px; }
@@ -286,7 +316,7 @@ app.get("/", async (req, res) => {
         html += `<div class="section">`;
         html += `<h2>${section.heading}</h2>`;
         section.tables.forEach(tableRows => {
-          html += `<table><tr><th>#</th><th>Name / Link</th><th>Providers</th><th>Percent</th></tr>`;
+          html += `<table><tr><th>#</th><th>Category</th><th>Providers</th><th>Percentage</th></tr>`;
           tableRows.forEach((row, index) => {
             const internalLink = `/provider-details?url=${encodeURIComponent(row.link)}`;
             html += `
@@ -307,8 +337,8 @@ app.get("/", async (req, res) => {
     // Render ALL provider details
     if (providerDetailRows.length) {
       html += `<div class="section">`;
-      html += `<h2>All Providers (from #search-result table)</h2>`;
-      html += `<button onclick="downloadCSV()">⬇ Download CSV</button>`;
+      html += `<h2>📋 Complete Provider Database (${providerDetailRows.length.toLocaleString()} Records)</h2>`;
+      html += `<button class="btn" onclick="downloadCSV()">📥 Download Complete CSV (${providerDetailRows.length.toLocaleString()} records)</button>`;
       html += `<table id="provider-details-table">
         <tr>
           <th>#</th>
@@ -322,8 +352,8 @@ app.get("/", async (req, res) => {
       providerDetailRows.forEach((row, index) => {
         html += `
           <tr>
-            <td>${index + 1}</td>
-            <td><a href="${row.providerLink}" target="_blank">${row.providerName}</a></td>
+            <td>${(index + 1).toLocaleString()}</td>
+            <td><a href="${row.providerLink}" target="_blank" title="View provider details">${row.providerName}</a></td>
             <td>${row.address}</td>
             <td>${row.taxonomy}</td>
             <td>${row.enumerationDate}</td>
@@ -333,24 +363,49 @@ app.get("/", async (req, res) => {
       html += `</table>`;
       html += `</div>`;
 
-      // Add CSV download script
+      // Enhanced CSV download script
       html += `
         <script>
           function downloadCSV() {
-            const rows = document.querySelectorAll("#provider-details-table tr");
-            let csvContent = "";
-            rows.forEach(row => {
-              const cols = row.querySelectorAll("th, td");
-              const rowData = Array.from(cols).map(col => '"' + col.innerText.replace(/"/g, '""') + '"');
-              csvContent += rowData.join(",") + "\\n";
-            });
-            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = "providers_details.csv";
-            a.click();
-            URL.revokeObjectURL(url);
+            const button = event.target;
+            button.disabled = true;
+            button.textContent = '⏳ Preparing CSV...';
+            
+            setTimeout(() => {
+              const rows = document.querySelectorAll("#provider-details-table tr");
+              let csvContent = "\\ufeff"; // UTF-8 BOM for proper Excel display
+              
+              rows.forEach((row, index) => {
+                const cols = row.querySelectorAll("th, td");
+                const rowData = Array.from(cols).map(col => {
+                  const text = col.innerText.replace(/"/g, '""').replace(/\\n/g, ' ').trim();
+                  return '"' + text + '"';
+                });
+                csvContent += rowData.join(",") + "\\n";
+                
+                // Show progress for large datasets
+                if (index % 1000 === 0) {
+                  button.textContent = \`⏳ Processing \${index.toLocaleString()} rows...\`;
+                }
+              });
+              
+              const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = \`providers_complete_\${new Date().toISOString().split('T')[0]}.csv\`;
+              a.style.display = 'none';
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+              
+              button.disabled = false;
+              button.textContent = '✅ Download Complete CSV';
+              setTimeout(() => {
+                button.textContent = '📥 Download Complete CSV (${providerDetailRows.length.toLocaleString()} records)';
+              }, 3000);
+            }, 100);
           }
         </script>
       `;
@@ -390,73 +445,121 @@ app.get("/", async (req, res) => {
   }
 });
 
-// 🔹 Route 2: Provider details - USING ORIGINAL SELECTORS
+// 🔹 Route 2: Provider details with enhanced functionality
 app.get("/provider-details", async (req, res) => {
   try {
     const pageUrl = req.query.url;
-    if (!pageUrl) return res.status(400).send("Missing URL parameter");
+    if (!pageUrl) {
+      return res.status(400).send(`
+        <html><head><title>Missing Parameter</title></head>
+        <body style="font-family:Arial,sans-serif;margin:40px;">
+          <h1>❌ Missing URL Parameter</h1>
+          <p><a href="/">← Back to Providers</a></p>
+        </body></html>
+      `);
+    }
 
-    const fullUrl = pageUrl.startsWith("http")
-      ? pageUrl
-      : `https://opennpi.com${pageUrl}`;
-
-    // 🔹 USING ORIGINAL SELECTOR: "#search-result table"
-    const rows = await scrapeTablesWithPagination(fullUrl, "#search-result table");
+    const fullUrl = pageUrl.startsWith("http") ? pageUrl : `https://opennpi.com${pageUrl}`;
+    
+    console.log(`🔍 Fetching specific provider details from: ${fullUrl}`);
+    const startTime = Date.now();
+    
+    const rows = await scrapeTablesWithPagination(fullUrl, "#search-result table", 50);
+    
+    const endTime = Date.now();
+    const duration = Math.round((endTime - startTime) / 1000);
 
     let html = `
       <html>
       <head>
-        <title>Provider Details</title>
+        <title>Provider Category Details</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
-          body { font-family: Arial, sans-serif; margin: 20px; }
-          table { width: 100%; border-collapse: collapse; margin-top: 20px; margin-bottom: 20px; }
-          th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-          th { background: #08326B; color: #fff; }
-          tr:nth-child(even) { background: #f9f9f9; }
-          a { color: #08326B; text-decoration: none; }
+          body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; background: #f5f7fa; }
+          .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+          .header { background: linear-gradient(135deg, #08326B, #0a4a8a); color: white; padding: 30px; margin: -20px -20px 30px -20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+          .nav { margin: 15px 0; }
+          .nav a, .btn { display: inline-block; padding: 10px 20px; background: #08326B; color: white; text-decoration: none; border-radius: 6px; margin-right: 10px; font-weight: 500; transition: all 0.3s ease; }
+          .nav a:hover, .btn:hover { background: #0a4a8a; transform: translateY(-2px); }
+          table { width: 100%; border-collapse: collapse; margin: 20px 0; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+          th, td { border: 1px solid #e1e5e9; padding: 12px 8px; text-align: left; }
+          th { background: linear-gradient(135deg, #08326B, #0a4a8a); color: #fff; font-weight: 600; }
+          tr:nth-child(even) { background: #f8fafc; }
+          tr:hover { background: #e8f4fd; }
+          a { color: #08326B; text-decoration: none; font-weight: 500; }
           a:hover { text-decoration: underline; }
-          button { margin-bottom: 15px; padding: 8px 12px; font-size: 14px; cursor: pointer; }
+          .stats { background: white; padding: 20px; border-radius: 8px; margin: 20px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); text-align: center; }
         </style>
         <script>
-          function backToProviders() {
-            window.location.href = "/";
-          }
+          function backToProviders() { window.location.href = "/"; }
           function downloadCSV() {
-            const rows = document.querySelectorAll("#provider-details-table tr");
-            let csvContent = "";
-            rows.forEach(row => {
-              const cols = row.querySelectorAll("th, td");
-              const rowData = Array.from(cols).map(col => '"' + col.innerText.replace(/"/g, '""') + '"');
-              csvContent += rowData.join(",") + "\\n";
-            });
-            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.download = "provider_details.csv";
-            a.click();
-            URL.revokeObjectURL(url);
+            const button = event.target;
+            button.disabled = true;
+            button.textContent = '⏳ Generating CSV...';
+            
+            setTimeout(() => {
+              const rows = document.querySelectorAll("#provider-details-table tr");
+              let csvContent = "\\ufeff";
+              
+              rows.forEach(row => {
+                const cols = row.querySelectorAll("th, td");
+                const rowData = Array.from(cols).map(col => {
+                  const text = col.innerText.replace(/"/g, '""').replace(/\\n/g, ' ').trim();
+                  return '"' + text + '"';
+                });
+                csvContent += rowData.join(",") + "\\n";
+              });
+              
+              const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = \`provider_category_\${new Date().toISOString().split('T')[0]}.csv\`;
+              a.style.display = 'none';
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+              
+              button.disabled = false;
+              button.textContent = '✅ Downloaded!';
+              setTimeout(() => button.textContent = '📥 Download CSV', 2000);
+            }, 100);
           }
         </script>
       </head>
       <body>
-        <h2>Provider Details (Total: ${rows.length})</h2>
-        <a onclick="backToProviders()">⬅ Back to Providers</a>
-        <button onclick="downloadCSV()">⬇ Download CSV</button>
-        <table id="provider-details-table">
-          <tr>
-            <th>#</th>
-            <th>Provider Name</th>
-            <th>Address</th>
-            <th>Taxonomy</th>
-            <th>Enumeration Date</th>
-          </tr>
+        <div class="container">
+          <div class="header">
+            <h1>📊 Provider Category Details</h1>
+            <p>Found ${rows.length.toLocaleString()} providers • Loaded in ${duration}s</p>
+          </div>
+          
+          <div class="nav">
+            <a href="#" onclick="backToProviders()">← Back to Main Directory</a>
+            <button class="btn" onclick="downloadCSV()">📥 Download CSV</button>
+          </div>
+          
+          <div class="stats">
+            <h3>Total Records: ${rows.length.toLocaleString()}</h3>
+          </div>
+          
+          <table id="provider-details-table">
+            <tr>
+              <th>#</th>
+              <th>Provider Name</th>
+              <th>Address</th>
+              <th>Taxonomy</th>
+              <th>Enumeration Date</th>
+            </tr>
     `;
 
     rows.forEach((row, index) => {
       html += `
         <tr>
-          <td>${index + 1}</td>
-          <td><a href="${row.providerLink}" target="_blank">${row.providerName}</a></td>
+          <td>${(index + 1).toLocaleString()}</td>
+          <td><a href="${row.providerLink}" target="_blank" title="View full provider profile">${row.providerName}</a></td>
           <td>${row.address}</td>
           <td>${row.taxonomy}</td>
           <td>${row.enumerationDate}</td>
@@ -464,12 +567,26 @@ app.get("/provider-details", async (req, res) => {
       `;
     });
 
-    html += `</table></body></html>`;
+    html += `</table></div></body></html>`;
     res.send(html);
 
   } catch (err) {
-    console.error("Error fetching provider details:", err.message);
-    res.status(500).send(`<p>Error: ${err.message}</p>`);
+    console.error("❌ Provider details error:", err.message);
+    const errorHtml = `
+      <html>
+      <head><title>Error Loading Details</title>
+      <style>body{font-family:Arial,sans-serif;margin:40px;background:#f5f5f5;}.error{background:white;padding:30px;border-radius:8px;}</style>
+      </head>
+      <body>
+        <div class="error">
+          <h1>❌ Error Loading Provider Details</h1>
+          <p><strong>Error:</strong> ${err.message}</p>
+          <p><a href="/" style="color:#08326B;">← Back to Main Directory</a></p>
+        </div>
+      </body>
+      </html>
+    `;
+    res.status(500).send(errorHtml);
   }
 });
 
@@ -481,12 +598,5 @@ app.get("/health", (req, res) => {
     env: process.env.NODE_ENV || 'development'
   });
 });
-
-// 🔹 Vercel-optimized server setup
-if (process.env.NODE_ENV !== 'production') {
-  app.listen(PORT, () => {
-    console.log(`✅ Server running at http://localhost:${PORT}/`);
-  });
-}
 
 module.exports = app;
