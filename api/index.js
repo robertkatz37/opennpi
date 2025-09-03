@@ -8,9 +8,18 @@ const PORT = 7000;
 // 🔹 Axios headers to mimic a real browser
 const axiosHeaders ={
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Referer": "https://opennpi.com"
+  "Accept-Language": "en-US,en;q=0.9",
+  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+  "Referer": "https://opennpi.com",
+  "Origin": "https://opennpi.com",
+  "sec-ch-ua": `"Not;A=Brand";v="99", "Google Chrome";v="139", "Chromium";v="139"`,
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-platform": `"Windows"`,
+  "sec-fetch-dest": "empty",
+  "sec-fetch-mode": "no-cors",
+  "sec-fetch-site": "cross-site",
+  "sec-fetch-storage-access": "active",
+  "cookie": "ar_debug=1"
   }
 
 // 🔹 Helper to scrape tables with pagination
