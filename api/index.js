@@ -401,7 +401,7 @@ app.get("/provider-details", async (req, res) => {
       : `https://opennpi.com${pageUrl}`;
 
     // 🔹 USING ORIGINAL SELECTOR: "#search-result table"
-    const rows = await scrapeTablesWithPagination(fullUrl, "#search-result table", 50);
+    const rows = await scrapeTablesWithPagination(fullUrl, "#search-result table");
 
     let html = `
       <html>
