@@ -38,7 +38,7 @@ async function fetchWithRetry(url, maxRetries = 2) {
 }
 
 // 🔹 Optimized pagination for Vercel serverless
-async function scrapeTablesWithPagination(baseUrl, tableSelector, maxPages = 15) {
+async function scrapeTablesWithPagination(baseUrl, tableSelector, maxPages = 10) {
   let allRows = [];
   let visited = new Set();
   let nextUrl = baseUrl;
@@ -299,7 +299,7 @@ app.get("/", async (req, res) => {
   }
 });
 
-// 🔹 Route 2: Provider details - FIXED navigation
+// 🔹 Route 2: Provider details
 app.get("/provider-details", async (req, res) => {
   try {
     const pageUrl = req.query.url;
@@ -309,7 +309,7 @@ app.get("/provider-details", async (req, res) => {
       ? pageUrl
       : `https://opennpi.com${pageUrl}`;
 
-    const rows = await scrapeTablesWithPagination(fullUrl, "#search-result table", 15);
+    const rows = await scrapeTablesWithPagination(fullUrl, "#search-result table");
 
     let html = `
       <html>
@@ -324,11 +324,10 @@ app.get("/provider-details", async (req, res) => {
           a { color: #08326B; text-decoration: none; }
           a:hover { text-decoration: underline; }
           button { margin-bottom: 15px; padding: 8px 12px; font-size: 14px; cursor: pointer; }
-          .nav { margin-bottom: 20px; }
         </style>
         <script>
           function backToProviders() {
-            window.location.href = "/";
+            window.location.href = "/providers";
           }
           function downloadCSV() {
             const rows = document.querySelectorAll("#provider-details-table tr");
@@ -349,11 +348,9 @@ app.get("/provider-details", async (req, res) => {
         </script>
       </head>
       <body>
-        <div class="nav">
-          <h2>Provider Details (Total: ${rows.length})</h2>
-          <button onclick="backToProviders()">⬅ Back to Providers</button>
-          <button onclick="downloadCSV()">⬇ Download CSV</button>
-        </div>
+        <h2>Provider Details (Total: ${rows.length})</h2>
+        <a onclick="backToProviders()">⬅ Back to Providers</a>
+        <button onclick="downloadCSV()">⬇ Download CSV</button>
         <table id="provider-details-table">
           <tr>
             <th>#</th>
@@ -380,17 +377,8 @@ app.get("/provider-details", async (req, res) => {
     res.send(html);
 
   } catch (err) {
-    const errorHtml = `
-      <html>
-      <head><title>Error</title></head>
-      <body style="font-family:Arial,sans-serif;margin:40px;">
-        <h1>Error Loading Provider Details</h1>
-        <p>Error: ${err.message}</p>
-        <p><a href="/" onclick="history.back()">← Back to Providers</a></p>
-      </body>
-      </html>
-    `;
-    res.status(500).send(errorHtml);
+    console.error("Error fetching provider details:", err.message);
+    res.status(500).send(`<p>Error: ${err.message}</p>`);
   }
 });
 
