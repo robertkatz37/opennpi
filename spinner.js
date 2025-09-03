@@ -54,8 +54,8 @@ async function scrapeTablesWithPagination(baseUrl, tableSelector) {
   return allRows;
 }
 
-// 🔹 Route 1: Providers list
-app.get("/providers", async (req, res) => {
+// 🔹 Route 1: Providers list on root "/"
+app.get("/", async (req, res) => {
   try {
     const url = "https://opennpi.com/provider";
     const { data } = await axios.get(url);
@@ -64,7 +64,7 @@ app.get("/providers", async (req, res) => {
     let results = [];
     $(".px-1 .col-12").each((i, el) => {
       const heading = $(el).find("h3").text().trim();
-      if (!heading) return;
+      if (!heading || heading === "Providers by Year") return;
 
       let tables = [];
       $(el).find("table").each((j, table) => {
@@ -88,7 +88,7 @@ app.get("/providers", async (req, res) => {
     // 🔹 Scrape #search-result table from main provider page with pagination
     const providerDetailRows = await scrapeTablesWithPagination(url, "#search-result table");
 
-    // Build HTML with spinner
+    // Build HTML with number column and CSV download
     let html = `
       <html>
       <head>
@@ -100,44 +100,25 @@ app.get("/providers", async (req, res) => {
           th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
           th { background: #08326B; color: #fff; }
           tr:nth-child(even) { background: #f9f9f9; }
-          a { color: #08326B; text-decoration: none; cursor: pointer; }
+          a { color: #08326B; text-decoration: none; }
           a:hover { text-decoration: underline; }
-
-          #overlay {
-            display: none;
-            position: fixed; top:0; left:0; right:0; bottom:0;
-            background: rgba(255,255,255,0.8);
-            z-index: 9999;
-            display: flex; justify-content: center; align-items: center;
-            font-size: 20px; color: #08326B;
-          }
+          button { margin-bottom: 15px; padding: 8px 12px; font-size: 14px; cursor: pointer; }
         </style>
-        <script>
-          function showSpinnerAndGo(link) {
-            document.getElementById("overlay").style.display = "flex";
-            window.location.href = link;
-          }
-
-          window.addEventListener("load", () => {
-            const overlay = document.getElementById("overlay");
-            if (overlay) overlay.style.display = "none";
-          });
-        </script>
       </head>
       <body>
-        <div id="overlay">⏳ Loading... Please wait</div>
     `;
 
     // Render provider summary tables
     results.forEach(section => {
       html += `<h2>${section.heading}</h2>`;
       section.tables.forEach(tableRows => {
-        html += `<table><tr><th>Name / Link</th><th>Providers</th><th>Percent</th></tr>`;
-        tableRows.forEach(row => {
+        html += `<table><tr><th>#</th><th>Name / Link</th><th>Providers</th><th>Percent</th></tr>`;
+        tableRows.forEach((row, index) => {
           const internalLink = `/provider-details?url=${encodeURIComponent(row.link)}`;
           html += `
             <tr>
-              <td><a onclick="showSpinnerAndGo('${internalLink}')">${row.text}</a></td>
+              <td>${index + 1}</td>
+              <td><a href="${internalLink}">${row.text}</a></td>
               <td>${row.providers}</td>
               <td>${row.percent}</td>
             </tr>
@@ -150,17 +131,20 @@ app.get("/providers", async (req, res) => {
     // Render provider details tables at the end
     if (providerDetailRows.length) {
       html += `<h2>All Providers (from #search-result table)</h2>`;
-      html += `<table>
+      html += `<button onclick="downloadCSV()">⬇ Download CSV</button>`;
+      html += `<table id="provider-details-table">
         <tr>
+          <th>#</th>
           <th>Provider Name</th>
           <th>Address</th>
           <th>Taxonomy</th>
           <th>Enumeration Date</th>
         </tr>
       `;
-      providerDetailRows.forEach(row => {
+      providerDetailRows.forEach((row, index) => {
         html += `
           <tr>
+            <td>${index + 1}</td>
             <td><a href="${row.providerLink}" target="_blank">${row.providerName}</a></td>
             <td>${row.address}</td>
             <td>${row.taxonomy}</td>
@@ -169,6 +153,28 @@ app.get("/providers", async (req, res) => {
         `;
       });
       html += `</table>`;
+
+      // Add CSV download script
+      html += `
+        <script>
+          function downloadCSV() {
+            const rows = document.querySelectorAll("#provider-details-table tr");
+            let csvContent = "";
+            rows.forEach(row => {
+              const cols = row.querySelectorAll("th, td");
+              const rowData = Array.from(cols).map(col => '"' + col.innerText.replace(/"/g, '""') + '"');
+              csvContent += rowData.join(",") + "\\n";
+            });
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "providers_details.csv";
+            a.click();
+            URL.revokeObjectURL(url);
+          }
+        </script>
+      `;
     }
 
     html += `</body></html>`;
@@ -198,38 +204,43 @@ app.get("/provider-details", async (req, res) => {
         <title>Provider Details</title>
         <style>
           body { font-family: Arial, sans-serif; margin: 20px; }
-          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 20px; margin-bottom: 20px; }
           th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
           th { background: #08326B; color: #fff; }
           tr:nth-child(even) { background: #f9f9f9; }
           a { color: #08326B; text-decoration: none; }
           a:hover { text-decoration: underline; }
-
-          #overlay {
-            display: flex; justify-content: center; align-items: center;
-            position: fixed; top:0; left:0; right:0; bottom:0;
-            background: rgba(255,255,255,0.8); font-size: 20px; color: #08326B;
-            z-index: 9999;
-          }
+          button { margin-bottom: 15px; padding: 8px 12px; font-size: 14px; cursor: pointer; }
         </style>
         <script>
-          function hideSpinner() {
-            const overlay = document.getElementById("overlay");
-            if (overlay) overlay.style.display = "none";
-          }
-          window.addEventListener("load", hideSpinner);
           function backToProviders() {
-            hideSpinner();
             window.location.href = "/providers";
+          }
+          function downloadCSV() {
+            const rows = document.querySelectorAll("#provider-details-table tr");
+            let csvContent = "";
+            rows.forEach(row => {
+              const cols = row.querySelectorAll("th, td");
+              const rowData = Array.from(cols).map(col => '"' + col.innerText.replace(/"/g, '""') + '"');
+              csvContent += rowData.join(",") + "\\n";
+            });
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "provider_details.csv";
+            a.click();
+            URL.revokeObjectURL(url);
           }
         </script>
       </head>
       <body>
-        <div id="overlay">⏳ Loading provider details... Please wait</div>
         <h2>Provider Details (Total: ${rows.length})</h2>
         <a onclick="backToProviders()">⬅ Back to Providers</a>
-        <table>
+        <button onclick="downloadCSV()">⬇ Download CSV</button>
+        <table id="provider-details-table">
           <tr>
+            <th>#</th>
             <th>Provider Name</th>
             <th>Address</th>
             <th>Taxonomy</th>
@@ -237,9 +248,10 @@ app.get("/provider-details", async (req, res) => {
           </tr>
     `;
 
-    rows.forEach(row => {
+    rows.forEach((row, index) => {
       html += `
         <tr>
+          <td>${index + 1}</td>
           <td><a href="${row.providerLink}" target="_blank">${row.providerName}</a></td>
           <td>${row.address}</td>
           <td>${row.taxonomy}</td>
@@ -257,6 +269,7 @@ app.get("/provider-details", async (req, res) => {
   }
 });
 
+
 app.listen(PORT, () => {
-  console.log(`✅ Server running at http://localhost:${PORT}/providers`);
+  console.log(`✅ Server running at http://localhost:${PORT}/`);
 });

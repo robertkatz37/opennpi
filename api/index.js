@@ -54,8 +54,8 @@ async function scrapeTablesWithPagination(baseUrl, tableSelector) {
   return allRows;
 }
 
-// 🔹 Route 1: Providers list
-app.get("/providers", async (req, res) => {
+// 🔹 Route 1: Providers list on root "/"
+app.get("/", async (req, res) => {
   try {
     const url = "https://opennpi.com/provider";
     const { data } = await axios.get(url);
@@ -185,6 +185,7 @@ app.get("/providers", async (req, res) => {
     res.status(500).send(`<p>Error: ${err.message}</p>`);
   }
 });
+
 // 🔹 Route 2: Provider details
 app.get("/provider-details", async (req, res) => {
   try {
@@ -269,6 +270,4 @@ app.get("/provider-details", async (req, res) => {
 });
 
 
-app.listen(PORT, () => {
-  console.log(`✅ Server running at http://localhost:${PORT}/providers`);
-});
+module.exports = app;
