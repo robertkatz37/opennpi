@@ -28,13 +28,13 @@ const createAxiosConfig = () => ({
 });
 
 // 🔹 Smart delay function to avoid rate limiting
-const smartDelay = async (pageNumber) => {
+/*const smartDelay = async (pageNumber) => {
   // Exponential backoff with jitter
   const baseDelay = Math.min(1000 + (pageNumber * 200), 3000);
   const jitter = Math.random() * 1000;
   const totalDelay = baseDelay + jitter;
   await new Promise(resolve => setTimeout(resolve, totalDelay));
-};
+};*/
 
 // 🔹 Retry mechanism for failed requests
 async function fetchWithRetry(url, maxRetries = 3) {
@@ -57,7 +57,7 @@ async function fetchWithRetry(url, maxRetries = 3) {
 }
 
 // 🔹 Enhanced scraper to get ALL records with better pagination handling
-async function scrapeTablesWithPagination(baseUrl, tableSelector, maxPages = 50) {
+async function scrapeTablesWithPagination(baseUrl, tableSelector, maxPages = 15) {
   let allRows = [];
   let visited = new Set();
   let nextUrl = baseUrl;
@@ -70,16 +70,20 @@ async function scrapeTablesWithPagination(baseUrl, tableSelector, maxPages = 50)
       console.log(`Already visited: ${nextUrl}, breaking loop`);
       break;
     }
+    if (nextUrl == "https://opennpi.com/provider?") {
+      console.log(`ok visited: ${nextUrl}, breaking loop`);
+      break;
+    }
     
     visited.add(nextUrl);
     pageCount++;
 
     try {
       // Add smart delay between requests
-      if (pageCount > 1) {
+    /*  if (pageCount > 1) {
         console.log(`Adding delay before page ${pageCount}...`);
         await smartDelay(pageCount);
-      }
+      }*/
 
       console.log(`📄 Fetching page ${pageCount}: ${nextUrl}`);
       
