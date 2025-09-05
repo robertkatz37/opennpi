@@ -35,7 +35,7 @@ async function fetchPage(url, retries = 3, delay = 3000) {
     try {
       const proxy = getRandomProxy();
       console.log(`🌐 Using proxy: ${proxy}`);
-      const agent = HttpsProxyAgent(proxy); // ✅ FIXED
+      const agent = new HttpsProxyAgent(proxy); // ✅ FIXED for your version
 
       const response = await axios.get(url, {
         httpsAgent: agent,
