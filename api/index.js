@@ -1,12 +1,12 @@
 const express = require("express");
 const axios = require("axios");
 const cheerio = require("cheerio");
-const HttpsProxyAgent = require("https-proxy-agent");
+const { HttpsProxyAgent } = require("https-proxy-agent");
 
 const app = express();
 const PORT = process.env.PORT || 7000;
 
-// 🔹 Proxy list (format: http://IP:PORT)
+// 🔹 Proxy list
 const proxies = [
   "http://139.99.237.62:80",
   "http://94.46.172.104:80",
@@ -35,7 +35,7 @@ async function fetchPage(url, retries = 3, delay = 3000) {
     try {
       const proxy = getRandomProxy();
       console.log(`🌐 Using proxy: ${proxy}`);
-      const agent = new HttpsProxyAgent(proxy);
+      const agent = HttpsProxyAgent(proxy); // ✅ FIXED
 
       const response = await axios.get(url, {
         httpsAgent: agent,
