@@ -5,73 +5,117 @@ const cheerio = require("cheerio");
 const app = express();
 const PORT = process.env.PORT || 7000;
 
-// 🔹 Enhanced axios configuration with proper headers to avoid 403
-const createAxiosConfig = () => ({
-  timeout: 45000, // 45 second timeout for Vercel
-  headers: {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Connection': 'keep-alive',
-    'Upgrade-Insecure-Requests': '1',
-    'Sec-Fetch-Dest': 'document',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'none',
-    'Sec-Fetch-User': '?1',
-    'Cache-Control': 'max-age=0',
-    'DNT': '1',
-    'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-    'Sec-Ch-Ua-Mobile': '?0',
-    'Sec-Ch-Ua-Platform': '"Windows"'
-  }
-});
+// 🔹 Enhanced axios configuration with rotating user agents and better headers
+const createAxiosConfig = (isFirstRequest = false) => {
+  const userAgents = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) Gecko/20100101 Firefox/121.0'
+  ];
+  
+  const randomUA = userAgents[Math.floor(Math.random() * userAgents.length)];
+  
+  return {
+    timeout: 30000, // Reduced timeout for Vercel
+    maxRedirects: 5,
+    headers: {
+      'User-Agent': randomUA,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': isFirstRequest ? 'none' : 'same-origin',
+      'Sec-Fetch-User': isFirstRequest ? '?1' : '?0',
+      'Cache-Control': 'max-age=0',
+      'DNT': '1',
+      'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120"',
+      'Sec-Ch-Ua-Mobile': '?0',
+      'Sec-Ch-Ua-Platform': randomUA.includes('Windows') ? '"Windows"' : randomUA.includes('Mac') ? '"macOS"' : '"Linux"',
+      // Add referer for subsequent requests
+      ...(isFirstRequest ? {} : { 'Referer': 'https://opennpi.com/provider' })
+    }
+  };
+};
 
-// 🔹 Smart delay function to avoid rate limiting
-/*const smartDelay = async (pageNumber) => {
-  // Exponential backoff with jitter
-  const baseDelay = Math.min(1000 + (pageNumber * 200), 3000);
-  const jitter = Math.random() * 1000;
+// 🔹 Smart delay with exponential backoff and jitter
+const smartDelay = async (pageNumber, hasError = false) => {
+  const baseDelay = hasError ? 5000 : Math.min(2000 + (pageNumber * 500), 8000);
+  const jitter = Math.random() * 2000;
   const totalDelay = baseDelay + jitter;
+  
+  console.log(`⏱️ Waiting ${Math.round(totalDelay/1000)}s before next request...`);
   await new Promise(resolve => setTimeout(resolve, totalDelay));
-};*/
+};
 
-// 🔹 Retry mechanism for failed requests
-async function fetchWithRetry(url, maxRetries = 3) {
+// 🔹 Enhanced retry mechanism with better error handling
+async function fetchWithRetry(url, maxRetries = 2, isFirstRequest = false) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      console.log(`Attempt ${attempt} for: ${url}`);
-      const response = await axios.get(url, createAxiosConfig());
-      return response;
+      console.log(`🔄 Attempt ${attempt}/${maxRetries} for: ${url}`);
+      
+      // Add delay before retry attempts
+      if (attempt > 1) {
+        await smartDelay(attempt, true);
+      }
+      
+      const response = await axios.get(url, createAxiosConfig(isFirstRequest));
+      
+      // Check if we got a valid response
+      if (response.status === 200 && response.data && response.data.length > 100) {
+        console.log(`✅ Success on attempt ${attempt}`);
+        return response;
+      } else {
+        throw new Error(`Invalid response: status ${response.status}, data length ${response.data?.length || 0}`);
+      }
+      
     } catch (error) {
-      console.error(`Attempt ${attempt} failed:`, error.message);
+      console.error(`❌ Attempt ${attempt} failed:`, error.message);
+      console.error(`Status: ${error.response?.status}, StatusText: ${error.response?.statusText}`);
+      
+      // Handle specific error cases
+      if (error.response?.status === 403) {
+        console.log(`🚫 Got 403 Forbidden - website blocking requests`);
+        if (attempt < maxRetries) {
+          console.log(`⏳ Waiting longer before retry due to 403...`);
+          await smartDelay(attempt * 2, true);
+        }
+      } else if (error.response?.status === 429) {
+        console.log(`⏳ Rate limited - waiting before retry...`);
+        await smartDelay(attempt * 3, true);
+      }
       
       if (attempt === maxRetries) {
         throw error;
       }
-      
-      // Wait longer between retries
-      await new Promise(resolve => setTimeout(resolve, attempt * 2000));
     }
   }
 }
 
-// 🔹 Enhanced scraper to get ALL records with better pagination handling
-async function scrapeTablesWithPagination(baseUrl, tableSelector, maxPages = 15) {
+// 🔹 Enhanced scraper with better pagination detection and limits
+async function scrapeTablesWithPagination(baseUrl, tableSelector, maxPages = 5) {
   let allRows = [];
   let visited = new Set();
   let nextUrl = baseUrl;
   let pageCount = 0;
+  let consecutiveEmptyPages = 0;
 
-  console.log(`Starting pagination scrape from: ${baseUrl}`);
+  console.log(`🚀 Starting pagination scrape from: ${baseUrl}`);
 
-  while (nextUrl && pageCount < maxPages) {
+  while (nextUrl && pageCount < maxPages && consecutiveEmptyPages < 2) {
+    // Prevent infinite loops
     if (visited.has(nextUrl)) {
-      console.log(`Already visited: ${nextUrl}, breaking loop`);
+      console.log(`🔄 Already visited: ${nextUrl}, breaking loop`);
       break;
     }
-    if (nextUrl == "https://opennpi.com/provider?") {
-      console.log(`ok visited: ${nextUrl}, breaking loop`);
+    
+    // Stop if we hit the empty URL pattern
+    if (nextUrl === "https://opennpi.com/provider?") {
+      console.log(`🛑 Hit empty URL pattern, stopping`);
       break;
     }
     
@@ -79,24 +123,35 @@ async function scrapeTablesWithPagination(baseUrl, tableSelector, maxPages = 15)
     pageCount++;
 
     try {
-      // Add smart delay between requests
-    /*  if (pageCount > 1) {
-        console.log(`Adding delay before page ${pageCount}...`);
+      // Add smart delay between requests (except first)
+      if (pageCount > 1) {
         await smartDelay(pageCount);
-      }*/
+      }
 
-      console.log(`📄 Fetching page ${pageCount}: ${nextUrl}`);
+      console.log(`📄 Fetching page ${pageCount}/${maxPages}: ${nextUrl}`);
       
-      const response = await fetchWithRetry(nextUrl);
+      const response = await fetchWithRetry(nextUrl, 2, pageCount === 1);
       const $ = cheerio.load(response.data);
 
       let pageRows = 0;
       
-      // Scrape table rows with better selector handling
-      const tableRows = $(`${tableSelector} tbody tr, ${tableSelector} tr`).filter((i, tr) => {
-        const tds = $(tr).find("td");
-        return tds.length >= 4; // Only rows with enough columns
-      });
+      // Enhanced table row scraping with better selectors
+      const tableSelectors = [
+        `${tableSelector} tbody tr`,
+        `${tableSelector} tr`,
+        '.table tbody tr',
+        '#search-result tbody tr',
+        'table tbody tr'
+      ];
+      
+      let tableRows = $();
+      for (const selector of tableSelectors) {
+        tableRows = $(selector).filter((i, tr) => {
+          const tds = $(tr).find("td");
+          return tds.length >= 4; // Only rows with enough columns
+        });
+        if (tableRows.length > 0) break;
+      }
 
       tableRows.each((i, tr) => {
         const tds = $(tr).find("td");
@@ -105,7 +160,9 @@ async function scrapeTablesWithPagination(baseUrl, tableSelector, maxPages = 15)
         const providerName = linkTag.text().trim();
         
         // Skip header rows or empty rows
-        if (!providerName || providerName.toLowerCase() === 'provider name') {
+        if (!providerName || 
+            providerName.toLowerCase() === 'provider name' || 
+            providerName.toLowerCase().includes('no records found')) {
           return;
         }
 
@@ -129,28 +186,37 @@ async function scrapeTablesWithPagination(baseUrl, tableSelector, maxPages = 15)
 
       console.log(`✅ Page ${pageCount}: Found ${pageRows} rows (Total: ${allRows.length})`);
 
-      // Look for next page link with multiple selectors
+      // Track consecutive empty pages
+      if (pageRows === 0) {
+        consecutiveEmptyPages++;
+        console.log(`⚠️ Empty page detected (${consecutiveEmptyPages}/2)`);
+      } else {
+        consecutiveEmptyPages = 0;
+      }
+
+      // Enhanced pagination link detection
       let nextLink = null;
       
-      // Try different pagination selectors
       const paginationSelectors = [
-        ".page-item.mx-auto a.page-link",
-        ".pagination .page-item a",
-        "a[aria-label='Next']",
-        ".next-page",
-        "a:contains('Next')",
-        "a:contains('>')"
+        ".page-item.mx-auto a.page-link[href*='?']",
+        ".pagination .page-item:not(.disabled) a[href*='?']",
+        "a[aria-label='Next'][href*='?']",
+        "a:contains('Next')[href*='?']",
+        "a:contains('>')[href*='?']"
       ];
 
       for (const selector of paginationSelectors) {
         const links = $(selector);
         links.each((i, el) => {
+          const href = $(el).attr("href");
           const linkText = $(el).text().trim().toLowerCase();
           const ariaLabel = $(el).attr('aria-label')?.toLowerCase() || '';
+          const isDisabled = $(el).closest('.page-item').hasClass('disabled') || 
+                           $(el).hasClass('disabled');
           
-          if (linkText === 'next page' || linkText === 'next' || linkText === '>' || 
-              ariaLabel.includes('next')) {
-            nextLink = $(el).attr("href");
+          if (!isDisabled && href && href !== '#' && 
+              (linkText === 'next' || linkText === '>' || ariaLabel.includes('next'))) {
+            nextLink = href;
             return false; // Break the each loop
           }
         });
@@ -159,56 +225,70 @@ async function scrapeTablesWithPagination(baseUrl, tableSelector, maxPages = 15)
       }
 
       // Construct full URL for next page
-      if (nextLink) {
+      if (nextLink && nextLink !== '#') {
         nextUrl = nextLink.startsWith("http") 
           ? nextLink 
           : `https://opennpi.com${nextLink}`;
-        console.log(`🔗 Next page found: ${nextUrl}`);
+        
+        // Validate next URL
+        if (nextUrl !== baseUrl && !visited.has(nextUrl)) {
+          console.log(`🔗 Next page found: ${nextUrl}`);
+        } else {
+          console.log(`🏁 Invalid or duplicate next URL, stopping`);
+          nextUrl = null;
+        }
       } else {
         console.log(`🏁 No more pages found. Pagination complete.`);
         nextUrl = null;
       }
 
-      // Break if no new rows found (might indicate end of data)
-      if (pageRows === 0 && pageCount > 1) {
-        console.log(`⚠️ No rows found on page ${pageCount}, assuming end of data`);
+      // Early break conditions for Vercel timeout protection
+      if (Date.now() - startTime > 45000) { // 45 second safety margin
+        console.log(`⏰ Approaching timeout, stopping at ${allRows.length} records`);
         break;
       }
 
     } catch (error) {
       console.error(`❌ Error on page ${pageCount}:`, error.message);
       
-      // For 403 errors, try to continue with what we have
+      // Handle different error types
       if (error.response?.status === 403) {
-        console.log(`🚫 Got 403 on page ${pageCount}, stopping pagination`);
+        console.log(`🚫 Got 403 on page ${pageCount}, likely blocked by anti-bot`);
+        break; // Stop pagination on 403
+      } else if (error.response?.status === 429) {
+        console.log(`⏳ Rate limited on page ${pageCount}, stopping`);
+        break;
+      } else if (error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT') {
+        console.log(`🔌 Connection issue on page ${pageCount}`);
         break;
       }
       
-      // For other errors, retry a few times then continue
-      if (pageCount <= 3) {
-        console.log(`🔄 Retrying page ${pageCount} after error...`);
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        continue;
-      } else {
-        console.log(`⏭️ Skipping page ${pageCount} and continuing...`);
-        break;
-      }
+      // For other errors, continue with what we have
+      console.log(`⏭️ Continuing with ${allRows.length} records collected so far`);
+      break;
     }
   }
 
-  console.log(`🎉 Pagination complete! Total records: ${allRows.length} from ${pageCount} pages`);
+  const endTime = Date.now();
+  const totalTime = Math.round((endTime - startTime) / 1000);
+  console.log(`🎉 Pagination complete! ${allRows.length} records from ${pageCount} pages in ${totalTime}s`);
+  
   return allRows;
 }
 
+// Add timing tracking
+let startTime;
+
 // 🔹 Route 1: Providers list on root "/"
 app.get("/", async (req, res) => {
+  startTime = Date.now();
+  
   try {
-    const startTime = Date.now();
     const url = "https://opennpi.com/provider";
     
     console.log("🚀 Starting main provider page scrape...");
     
-    const response = await fetchWithRetry(url);
+    const response = await fetchWithRetry(url, 2, true);
     const $ = cheerio.load(response.data);
 
     let results = [];
@@ -237,18 +317,19 @@ app.get("/", async (req, res) => {
       if (tables.length) results.push({ heading, tables });
     });
 
-    // 🔹 Scrape ALL provider details with enhanced pagination
-    console.log("📊 Starting comprehensive provider details scrape...");
-    const providerDetailRows = await scrapeTablesWithPagination(url, "#search-result table", 100); // Allow up to 100 pages
+    // 🔹 Scrape provider details with reduced pagination for Vercel
+    console.log("📊 Starting provider details scrape (limited for Vercel)...");
+    const maxPagesForVercel = process.env.NODE_ENV === 'production' ? 3 : 10;
+    const providerDetailRows = await scrapeTablesWithPagination(url, "#search-result table", maxPagesForVercel);
 
     const endTime = Date.now();
     const duration = Math.round((endTime - startTime) / 1000);
 
-    // Build enhanced HTML response
+    // Build enhanced HTML response with warning for limited data
     let html = `
       <html>
       <head>
-        <title>Complete Providers Directory</title>
+        <title>Healthcare Providers Directory</title>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
@@ -257,6 +338,7 @@ app.get("/", async (req, res) => {
           .header { background: linear-gradient(135deg, #08326B, #0a4a8a); color: white; padding: 30px; margin: -20px -20px 30px -20px; border-radius: 10px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
           .header h1 { margin: 0 0 10px 0; font-size: 2.5em; }
           .header p { margin: 5px 0; opacity: 0.9; }
+          .warning { background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 8px; margin: 20px 0; }
           .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0; }
           .stat-card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); text-align: center; }
           .stat-number { font-size: 2em; font-weight: bold; color: #08326B; margin-bottom: 5px; }
@@ -272,8 +354,6 @@ app.get("/", async (req, res) => {
           a:hover { text-decoration: underline; color: #0a4a8a; }
           .btn { display: inline-block; padding: 12px 24px; background: linear-gradient(135deg, #08326B, #0a4a8a); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600; text-decoration: none; transition: all 0.3s ease; margin: 10px 5px 10px 0; }
           .btn:hover { background: linear-gradient(135deg, #0a4a8a, #08326B); transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
-          .loading { text-align: center; padding: 40px; color: #666; }
-          .error { background: #fee; border-left: 4px solid #f56565; padding: 15px; margin: 15px 0; border-radius: 4px; }
           .success { background: #f0fff4; border-left: 4px solid #68d391; padding: 15px; margin: 15px 0; border-radius: 4px; }
           @media (max-width: 768px) {
             .container { padding: 10px; }
@@ -288,15 +368,28 @@ app.get("/", async (req, res) => {
       <body>
         <div class="container">
           <div class="header">
-            <h1>🏥 Complete Healthcare Providers Directory</h1>
-            <p>Comprehensive data from OpenNPI.com</p>
-            <p>Scraped in ${duration} seconds • Last updated: ${new Date().toLocaleString()}</p>
+            <h1>🏥 Healthcare Providers Directory</h1>
+            <p>Data from OpenNPI.com</p>
+            <p>Scraped in ${duration} seconds • ${new Date().toLocaleString()}</p>
           </div>
-          
+    `;
+
+    // Add warning for production environment
+    if (process.env.NODE_ENV === 'production') {
+      html += `
+        <div class="warning">
+          ⚠️ <strong>Limited Data Notice:</strong> Due to Vercel's serverless limitations and anti-bot protections, 
+          this deployment shows limited results (first ${maxPagesForVercel} pages only). For complete data scraping, 
+          run this application locally or use a dedicated server environment.
+        </div>
+      `;
+    }
+
+    html += `
           <div class="stats">
             <div class="stat-card">
               <div class="stat-number">${providerDetailRows.length.toLocaleString()}</div>
-              <div class="stat-label">Total Providers</div>
+              <div class="stat-label">Providers Found</div>
             </div>
             <div class="stat-card">
               <div class="stat-number">${results.length}</div>
@@ -311,7 +404,7 @@ app.get("/", async (req, res) => {
 
     // Add success message
     if (providerDetailRows.length > 0) {
-      html += `<div class="success">✅ Successfully loaded ${providerDetailRows.length.toLocaleString()} provider records from multiple pages!</div>`;
+      html += `<div class="success">✅ Successfully loaded ${providerDetailRows.length.toLocaleString()} provider records!</div>`;
     }
 
     // Render provider summary tables
@@ -338,11 +431,11 @@ app.get("/", async (req, res) => {
       });
     }
 
-    // Render ALL provider details
+    // Render provider details
     if (providerDetailRows.length) {
       html += `<div class="section">`;
-      html += `<h2>📋 Complete Provider Database (${providerDetailRows.length.toLocaleString()} Records)</h2>`;
-      html += `<button class="btn" onclick="downloadCSV()">📥 Download Complete CSV (${providerDetailRows.length.toLocaleString()} records)</button>`;
+      html += `<h2>📋 Provider Database (${providerDetailRows.length.toLocaleString()} Records)</h2>`;
+      html += `<button class="btn" onclick="downloadCSV()">📥 Download CSV</button>`;
       html += `<table id="provider-details-table">
         <tr>
           <th>#</th>
@@ -357,7 +450,7 @@ app.get("/", async (req, res) => {
         html += `
           <tr>
             <td>${(index + 1).toLocaleString()}</td>
-            <td><a href="${row.providerLink}" target="_blank" title="View provider details">${row.providerName}</a></td>
+            <td><a href="${row.providerLink}" target="_blank">${row.providerName}</a></td>
             <td>${row.address}</td>
             <td>${row.taxonomy}</td>
             <td>${row.enumerationDate}</td>
@@ -367,7 +460,7 @@ app.get("/", async (req, res) => {
       html += `</table>`;
       html += `</div>`;
 
-      // Enhanced CSV download script
+      // CSV download script
       html += `
         <script>
           function downloadCSV() {
@@ -377,27 +470,22 @@ app.get("/", async (req, res) => {
             
             setTimeout(() => {
               const rows = document.querySelectorAll("#provider-details-table tr");
-              let csvContent = "\\ufeff"; // UTF-8 BOM for proper Excel display
+              let csvContent = "\\ufeff";
               
-              rows.forEach((row, index) => {
+              rows.forEach((row) => {
                 const cols = row.querySelectorAll("th, td");
                 const rowData = Array.from(cols).map(col => {
                   const text = col.innerText.replace(/"/g, '""').replace(/\\n/g, ' ').trim();
                   return '"' + text + '"';
                 });
                 csvContent += rowData.join(",") + "\\n";
-                
-                // Show progress for large datasets
-                if (index % 1000 === 0) {
-                  button.textContent = \`⏳ Processing \${index.toLocaleString()} rows...\`;
-                }
               });
               
               const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
               const url = URL.createObjectURL(blob);
               const a = document.createElement("a");
               a.href = url;
-              a.download = \`providers_complete_\${new Date().toISOString().split('T')[0]}.csv\`;
+              a.download = \`providers_\${new Date().toISOString().split('T')[0]}.csv\`;
               a.style.display = 'none';
               document.body.appendChild(a);
               a.click();
@@ -405,16 +493,14 @@ app.get("/", async (req, res) => {
               URL.revokeObjectURL(url);
               
               button.disabled = false;
-              button.textContent = '✅ Download Complete CSV';
+              button.textContent = '✅ Download Complete';
               setTimeout(() => {
-                button.textContent = '📥 Download Complete CSV (${providerDetailRows.length.toLocaleString()} records)';
-              }, 3000);
+                button.textContent = '📥 Download CSV';
+              }, 2000);
             }, 100);
           }
         </script>
       `;
-    } else {
-      html += `<div class="error">⚠️ No provider details were retrieved. This might be due to website protection measures or temporary issues.</div>`;
     }
 
     html += `</div></body></html>`;
@@ -432,14 +518,14 @@ app.get("/", async (req, res) => {
           <h1>🚨 Scraping Error</h1>
           <p><strong>Error:</strong> ${err.message}</p>
           <p><strong>Status:</strong> ${err.response?.status || 'Unknown'}</p>
-          <h3>Possible causes:</h3>
+          <h3>Common causes on Vercel:</h3>
           <ul>
-            <li>Website blocking automated requests (403 Forbidden)</li>
-            <li>Network connectivity issues</li>
-            <li>Website structure changes</li>
-            <li>Rate limiting or IP blocking</li>
-            <li>Server timeout (Vercel 60s limit)</li>
+            <li><strong>403 Forbidden:</strong> Website detected automated requests</li>
+            <li><strong>Timeout:</strong> Exceeded Vercel's 60-second limit</li>
+            <li><strong>Rate Limiting:</strong> Too many requests too quickly</li>
+            <li><strong>Network Issues:</strong> Temporary connectivity problems</li>
           </ul>
+          <p><strong>Solution:</strong> Try running locally for complete data scraping.</p>
           <p><a href="/" style="color:#08326B;">🔄 Try Again</a></p>
         </div>
       </body>
@@ -466,9 +552,10 @@ app.get("/provider-details", async (req, res) => {
     const fullUrl = pageUrl.startsWith("http") ? pageUrl : `https://opennpi.com${pageUrl}`;
     
     console.log(`🔍 Fetching specific provider details from: ${fullUrl}`);
-    const startTime = Date.now();
+    startTime = Date.now();
     
-    const rows = await scrapeTablesWithPagination(fullUrl, "#search-result table", 50);
+    const maxPagesForCategory = process.env.NODE_ENV === 'production' ? 2 : 5;
+    const rows = await scrapeTablesWithPagination(fullUrl, "#search-result table", maxPagesForCategory);
     
     const endTime = Date.now();
     const duration = Math.round((endTime - startTime) / 1000);
@@ -483,6 +570,7 @@ app.get("/provider-details", async (req, res) => {
           body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; background: #f5f7fa; }
           .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
           .header { background: linear-gradient(135deg, #08326B, #0a4a8a); color: white; padding: 30px; margin: -20px -20px 30px -20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+          .warning { background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 8px; margin: 20px 0; }
           .nav { margin: 15px 0; }
           .nav a, .btn { display: inline-block; padding: 10px 20px; background: #08326B; color: white; text-decoration: none; border-radius: 6px; margin-right: 10px; font-weight: 500; transition: all 0.3s ease; }
           .nav a:hover, .btn:hover { background: #0a4a8a; transform: translateY(-2px); }
@@ -519,7 +607,7 @@ app.get("/provider-details", async (req, res) => {
               const url = URL.createObjectURL(blob);
               const a = document.createElement("a");
               a.href = url;
-              a.download = \`provider_category_\${new Date().toISOString().split('T')[0]}.csv\`;
+              a.download = \`category_\${new Date().toISOString().split('T')[0]}.csv\`;
               a.style.display = 'none';
               document.body.appendChild(a);
               a.click();
@@ -539,7 +627,19 @@ app.get("/provider-details", async (req, res) => {
             <h1>📊 Provider Category Details</h1>
             <p>Found ${rows.length.toLocaleString()} providers • Loaded in ${duration}s</p>
           </div>
-          
+    `;
+
+    // Add warning for production environment
+    if (process.env.NODE_ENV === 'production') {
+      html += `
+        <div class="warning">
+          ⚠️ <strong>Limited Results:</strong> Showing first ${maxPagesForCategory} pages only due to Vercel limitations. 
+          Run locally for complete category data.
+        </div>
+      `;
+    }
+
+    html += `
           <div class="nav">
             <a href="#" onclick="backToProviders()">← Back to Main Directory</a>
             <button class="btn" onclick="downloadCSV()">📥 Download CSV</button>
@@ -585,6 +685,8 @@ app.get("/provider-details", async (req, res) => {
         <div class="error">
           <h1>❌ Error Loading Provider Details</h1>
           <p><strong>Error:</strong> ${err.message}</p>
+          <p><strong>Status:</strong> ${err.response?.status || 'Unknown'}</p>
+          <p>This might be due to anti-bot protections or Vercel timeouts.</p>
           <p><a href="/" style="color:#08326B;">← Back to Main Directory</a></p>
         </div>
       </body>
@@ -594,19 +696,58 @@ app.get("/provider-details", async (req, res) => {
   }
 });
 
+// 🔹 API endpoint for JSON data (useful for testing)
+app.get("/api/providers", async (req, res) => {
+  try {
+    const maxPages = parseInt(req.query.pages) || 1;
+    const url = "https://opennpi.com/provider";
+    
+    console.log(`🔌 API request for ${maxPages} pages`);
+    
+    const providerDetailRows = await scrapeTablesWithPagination(url, "#search-result table", Math.min(maxPages, 5));
+    
+    res.json({
+      success: true,
+      totalRecords: providerDetailRows.length,
+      maxPagesAllowed: process.env.NODE_ENV === 'production' ? 5 : maxPages,
+      data: providerDetailRows,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error("❌ API error:", error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      status: error.response?.status || 'Unknown'
+    });
+  }
+});
+
 // 🔹 Health check for Vercel
 app.get("/health", (req, res) => {
   res.json({ 
     status: "OK", 
     timestamp: new Date().toISOString(),
-    env: process.env.NODE_ENV || 'development'
+    env: process.env.NODE_ENV || 'development',
+    version: "2.0.0"
   });
+});
+
+// 🔹 Add route for robots.txt to be nice to the target website
+app.get("/robots.txt", (req, res) => {
+  res.type('text/plain');
+  res.send(`User-agent: *
+Disallow: 
+Crawl-delay: 10`);
 });
 
 // 🔹 Vercel-optimized server setup
 if (process.env.NODE_ENV !== 'production') {
   app.listen(PORT, () => {
     console.log(`✅ Server running at http://localhost:${PORT}/`);
+    console.log(`📊 API endpoint: http://localhost:${PORT}/api/providers`);
+    console.log(`🏥 Health check: http://localhost:${PORT}/health`);
   });
 }
 
