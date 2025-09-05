@@ -37,7 +37,7 @@ const createAxiosConfig = () => ({
 };*/
 
 // 🔹 Retry mechanism for failed requests
-async function fetchWithRetry(url, maxRetries = 30) {
+async function fetchWithRetry(url, maxRetries = 3) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       console.log(`Attempt ${attempt} for: ${url}`);
