@@ -13,6 +13,7 @@ async function scrapeTablesWithPagination(baseUrl, tableSelector) {
 
   while (nextUrl) {
     if (visited.has(nextUrl)) break;
+    if (nextUrl == "https://opennpi.com/provider?") break;
     visited.add(nextUrl);
 
     const { data } = await axios.get(nextUrl);
